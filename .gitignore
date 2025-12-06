@@ -1,0 +1,14 @@
+dataset/
+dataset_raw/
+dataset.zip
+__pycache__/
+*.pyc
+
+venv/
+env/
+.env
+.venv/
+
+.DS_Store
+
+# *.pth
