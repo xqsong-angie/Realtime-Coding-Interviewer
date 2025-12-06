@@ -1,7 +1,7 @@
 import streamlit as st
 import cv2
 import tempfile
-from modules import llm_interviewer, gaze_tracker, avatar_gen
+from modules import attention_tracker, llm_interviewer, avatar_gen
 import random
 import json
 import os
