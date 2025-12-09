@@ -1,9 +1,8 @@
 import streamlit as st
-from modules.attention_detector import load_model,AttentionDetector
+from modules.attention_detector import load_model,AttentionDetector,state_manager
 import random
 import json
 import os
-from pynput import keyboard
 from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, WebRtcMode,RTCConfiguration
 
 import time
@@ -17,9 +16,6 @@ def on_press(key):
     last_key_time = time.time()
     print(f"Key Pressed: {key}")
 
-#Note: replace this part for deployment as servers cannot listen to keyboard at client side
-listener = keyboard.Listener(on_press=on_press)
-listener.start()
 
 RTC_CONFIGURATION = RTCConfiguration(
     {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
@@ -101,13 +97,24 @@ def show_interview_page():
         with open(starter_path, "r") as f:
             code_content = f.read()
 
+        if 'prev_code' not in st.session_state:
+            st.session_state['prev_code'] = ""
+
+        def on_code_change():
+            state_manager.last_type_time = time.time()
+
         code = st_ace(
             value=code_content,
             language="python",
             theme="monokai",
-            height=500
+            height=500,
+            auto_update=True,
+            key="my_code_editor"
         )
 
+        if code != st.session_state['prev_code']:
+            state_manager.last_type_time = time.time()
+            st.session_state['prev_code'] = code
 
         
         if st.button("Submit Solution"):

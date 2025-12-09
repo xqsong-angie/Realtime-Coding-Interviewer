@@ -32,6 +32,12 @@ def load_model():
         print("Model not found, using random weights for demo")
     return model, device
 
+class StateManager:
+    def __init__(self):
+        self.last_type_time = time.time()
+
+state_manager = StateManager()
+
 class AttentionDetector(VideoTransformerBase):
     def __init__(self,model,device):
         self.model=model
@@ -39,7 +45,7 @@ class AttentionDetector(VideoTransformerBase):
         self.distracted_start_time = None
         self.current_display_status = "Focused"
 
-    def recv(self, frame):
+    def recv(self, frame: av.VideoFrame)-> av.VideoFrame:
         try:
             img = frame.to_ndarray(format="bgr24")
             
@@ -54,12 +60,11 @@ class AttentionDetector(VideoTransformerBase):
 
             IS_DISTRACTED_FRAME = (pred_idx == 0)
 
-            global last_key_time
             current_time = time.time()
-            time_since_last_type = current_time - last_key_time
+            time_since_last_type = current_time - state_manager.last_type_time
 
             is_typing = time_since_last_type < 5.0
-            is_idle = time_since_last_type > self.IDLE_THRESHOLD
+            is_idle = time_since_last_type > IDLE_THRESHOLD
 
             #If the user is typing, then the user is definitely focused
             if is_typing:
@@ -87,17 +92,17 @@ class AttentionDetector(VideoTransformerBase):
                     self.current_display_status = "Focused"
                 
 
-                if self.current_display_status == "Focused":
-                    color = (0, 255, 0)
-                    text = "Status: Focused"
-                else:
-                    color = (0, 0, 255)
-                    text = "Status: Distracted!"
+            if self.current_display_status == "Focused":
+                color = (0, 255, 0)
+                text = "Status: Focused"
+            else:
+                color = (0, 0, 255)
+                text = "Status: Distracted"
 
 
-                cv2.putText(img, f"Status: {self.current_display_status}", (30, 50), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-                cv2.rectangle(img, (0,0), (img.shape[1], img.shape[0]), color, 5)
+            cv2.putText(img, f"Status: {self.current_display_status}", (30, 50), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+            cv2.rectangle(img, (0,0), (img.shape[1], img.shape[0]), color, 5)
 
             return av.VideoFrame.from_ndarray(img, format="bgr24")
         except Exception as e:
