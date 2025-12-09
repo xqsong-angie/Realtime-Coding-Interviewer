@@ -2,31 +2,37 @@
     {
         "problem_level":"easy",
         "problem_topic":"dynamic programming",
-        "content":"70_Climbing Stairs.txt"
+        "content":"70_Climbing Stairs.txt",
+        "starter":"70_Climbing Stairs.py"
     },
     {
         "problem_level":"medium",
         "problem_topic":"dynamic programming",
-        "content":"5_Longest Palindromic Substring.txt"
+        "content":"5_Longest Palindromic Substring.txt",
+        "starter":"5_Longest Palindromic Substring.py"
     },
     {
         "problem_level":"hard",
         "problem_topic":"dynamic programming",
-        "content":"10_Regular Expression Matching.txt"
+        "content":"10_Regular Expression Matching.txt",
+        "starter":"10_Regular Expression Matching.py"
     },
     {
         "problem_level":"easy",
         "problem_topic":"tree",
-        "content":"94_Binary Tree Inorder Traversal.txt"
+        "content":"94_Binary Tree Inorder Traversal.txt",
+        "starter":"94_Binary Tree Inorder Traversal.py"
     },
     {
         "problem_level":"medium",
         "problem_topic":"tree",
-        "content":"96_Unique Binary Search Trees.txt"
+        "content":"96_Unique Binary Search Trees.txt",
+        "starter":"96_Unique Binary Search Trees.py"
     },
     {
         "problem_level":"hard",
         "problem_topic":"tree",
-        "content":"124_Binary Tree Maximum Path Sum.txt"
+        "content":"124_Binary Tree Maximum Path Sum.txt",
+        "starter":"124_Binary Tree Maximum Path Sum.py"
     }
 ]

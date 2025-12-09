@@ -5,6 +5,34 @@ from modules import attention_tracker, llm_interviewer, avatar_gen
 import random
 import json
 import os
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, WebRtcMode
+import torch
+import torch.nn as nn
+from torchvision import models, transforms
+from PIL import Image
+import numpy as np
+import av
+import time
+from streamlit_ace import st_ace
+
+#load model
+@st.cache_resource
+def load_model():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = models.resnet18(weights=None)
+    model.fc = nn.Linear(model.fc.in_features, 2)
+    try:
+        model.load_state_dict(torch.load("attention_model_pretrained.pth", map_location=device))
+        model.eval()
+        model.to(device)
+        print("Model Loaded Successfully")
+    except:
+        print("Model not found, using random weights for demo")
+    return model, device
+
+model, device = load_model()
+
+
 
 st.set_page_config(layout="wide", page_title="AI Interviewer", page_icon="🤖")
 
@@ -54,17 +82,17 @@ def show_home_page():
 
 def show_interview_page():
     q_data = st.session_state.current_question
-  
+    
     st.button("← Back to Home", on_click=go_to_home)
     
     col1, col2 = st.columns([1, 1])
     
     with col1:
-        file_path = "./questions/"+q_data['content']
+        desc_path = "./questions/"+q_data['content']
         problem_desc = ""
-        if os.path.exists(file_path):
+        if os.path.exists(desc_path):
             try:
-                with open(file_path, "r", encoding="utf-8") as f:
+                with open(desc_path, "r", encoding="utf-8") as f:
                     problem_desc = f.read()
             except Exception as e:
                 problem_desc = f"Error reading file: {e}"
@@ -80,7 +108,10 @@ def show_interview_page():
         
     with col2:
         st.write("**Your Solution:**")
-        code = st.text_area("Code Editor", value=q_data['starter'], height=400)
+        starter_path="./starters/"+q_data['starter']
+        with open(starter_path, "r") as f:
+            code_content = f.read()
+        code = st.text_area("Code Editor", value=code_content, height=400)
         
         if st.button("Submit Solution"):
             st.success("Code submitted! Analyzing...")
