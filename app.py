@@ -1,37 +1,29 @@
 import streamlit as st
-import cv2
-import tempfile
-from modules import attention_tracker, llm_interviewer, avatar_gen
+from modules.attention_detector import load_model,AttentionDetector
 import random
 import json
 import os
-from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, WebRtcMode
-import torch
-import torch.nn as nn
-from torchvision import models, transforms
-from PIL import Image
-import numpy as np
-import av
+from pynput import keyboard
+from streamlit_webrtc import webrtc_streamer, VideoTransformerBase, WebRtcMode,RTCConfiguration
+
 import time
 from streamlit_ace import st_ace
 
-#load model
-@st.cache_resource
-def load_model():
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = models.resnet18(weights=None)
-    model.fc = nn.Linear(model.fc.in_features, 2)
-    try:
-        model.load_state_dict(torch.load("attention_model_pretrained.pth", map_location=device))
-        model.eval()
-        model.to(device)
-        print("Model Loaded Successfully")
-    except:
-        print("Model not found, using random weights for demo")
-    return model, device
-
 model, device = load_model()
 
+last_key_time = time.time()
+def on_press(key):
+    global last_key_time
+    last_key_time = time.time()
+    print(f"Key Pressed: {key}")
+
+#Note: replace this part for deployment as servers cannot listen to keyboard at client side
+listener = keyboard.Listener(on_press=on_press)
+listener.start()
+
+RTC_CONFIGURATION = RTCConfiguration(
+    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+)
 
 
 st.set_page_config(layout="wide", page_title="AI Interviewer", page_icon="🤖")
@@ -81,13 +73,13 @@ def show_home_page():
                 st.error(f"Error loading questions: {e}")
 
 def show_interview_page():
+
+    col_code, col_visual = st.columns([2, 1]) 
     q_data = st.session_state.current_question
     
     st.button("← Back to Home", on_click=go_to_home)
-    
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
+    with col_code:
+
         desc_path = "./questions/"+q_data['content']
         problem_desc = ""
         if os.path.exists(desc_path):
@@ -103,18 +95,41 @@ def show_interview_page():
         st.subheader("Problem Description")
         with st.container(height=400, border=True):
             st.markdown(problem_desc)
-            
-        st.empty().write("[Avatar Video Placeholder]")
         
-    with col2:
         st.write("**Your Solution:**")
         starter_path="./starters/"+q_data['starter']
         with open(starter_path, "r") as f:
             code_content = f.read()
-        code = st.text_area("Code Editor", value=code_content, height=400)
+
+        code = st_ace(
+            value=code_content,
+            language="python",
+            theme="monokai",
+            height=500
+        )
+
+
         
         if st.button("Submit Solution"):
             st.success("Code submitted! Analyzing...")
+
+    with col_visual:
+        st.subheader("AI Interviewer")
+        avatar_placeholder = st.empty()
+        avatar_placeholder.image("https://api.dicebear.com/7.x/avataaars/png?seed=Felix", caption="AI Interviewer")
+   
+        st.divider()
+        
+        st.subheader("Your Camera")
+        
+        ctx = webrtc_streamer(
+            key="attention_camera_feed",
+            mode=WebRtcMode.SENDRECV,
+            rtc_configuration=RTC_CONFIGURATION,
+            video_processor_factory=lambda:AttentionDetector(model,device),
+            media_stream_constraints={"video": True, "audio": False},
+            async_processing=True,
+        )
 
 if st.session_state.page == 'home':
     show_home_page()
