@@ -6,6 +6,7 @@ import io from 'socket.io-client';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import hark from 'hark';
+import SpeechRecognition, { useSpeechRecognition } from 'react-speech-recognition'; 
 import Setup from './Setup';
 
 const socket = io('http://localhost:5000'); 
@@ -16,22 +17,27 @@ function App() {
   const [activeQuestion, setActiveQuestion] = useState(null);
   const [code, setCode] = useState("# Waiting for problem...");
   const [status, setStatus] = useState("Connected ✅");
-  const lastTypeTime = useRef(0);
+  
   // SENSORS
   const [lastActive, setLastActive] = useState(Date.now());
   const [isSpeaking, setIsSpeaking] = useState(false);
+  
+  // SPEECH STATE (Invisible)
+  const { transcript, resetTranscript, browserSupportsSpeechRecognition } = useSpeechRecognition();
+  const silenceTimerRef = useRef(null);
+  const lastTypeTime = useRef(0);
+  const [isAiSpeaking, setIsAiSpeaking] = useState(false);
 
-  // --- PYTHON RUNNER STATE (MANUAL) ---
+  // PYTHON RUNNER STATE
   const [output, setOutput] = useState(">> Click 'Run Code' to test your solution.\n");
   const [isRunning, setIsRunning] = useState(false);
-  const pyodideRef = useRef(null); // Stores the engine
+  const pyodideRef = useRef(null);
+  const webcamRef = useRef(null); 
 
-  // --- 1. INITIALIZE PYODIDE (CDN METHOD) ---
+  // --- 1. INITIALIZE PYODIDE ---
   useEffect(() => {
     const loadPy = async () => {
-      // Wait for the script in index.html to load
       if (!window.loadPyodide) return;
-      
       try {
         console.log("Initializing Pyodide...");
         const py = await window.loadPyodide();
@@ -44,7 +50,88 @@ function App() {
     loadPy();
   }, []);
 
-  // --- HANDLERS ---
+  
+  useEffect(() => {
+    if (!sessionStarted) return;
+
+    const interval = setInterval(() => {
+      // Check if webcam is ready
+      if (webcamRef.current) {
+        // Capture frame
+        const imageSrc = webcamRef.current.getScreenshot();
+        if (imageSrc) {
+          // Remove header to get raw base64
+          const base64Data = imageSrc.split(',')[1];
+          // Emit to server
+          socket.emit('process_frame', { image: base64Data });
+        }
+      }
+    }, 1000); // Send 1 frame every second
+
+    return () => clearInterval(interval);
+  }, [sessionStarted]);
+
+  // --- 3. SPEECH LOGIC (Unchanged) ---
+  useEffect(() => {
+    if (sessionStarted) {
+      SpeechRecognition.startListening({ continuous: true, language: 'en-US' });
+    }
+  }, [sessionStarted]);
+
+  useEffect(() => {
+    if (!transcript) return;
+    if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+
+    silenceTimerRef.current = setTimeout(() => {
+        if (transcript.trim().length > 0) {
+            console.log("🎤 Sending to AI:", transcript);
+            socket.emit('process_user_text', { text: transcript });
+            resetTranscript(); 
+        }
+    }, 2000);
+
+    return () => clearTimeout(silenceTimerRef.current);
+  }, [transcript]);
+
+  // --- 4. TTS Logic (Unchanged) ---
+  useEffect(() => {
+    socket.on('ai_text_response', (data) => {
+      console.log("🤖 AI Says:", data.text);
+      speakText(data.text);
+    });
+    
+    socket.on('ai_nudge', (data) => {
+        console.log("⚠️ Nudge:", data.message);
+        speakText(data.message);
+        setLastActive(Date.now());
+    });
+    
+    // LOGIC ADDITION: Handle Image Errors
+    socket.on('session_data', (data) => {
+        setActiveQuestion(data.question);
+        if (data.question.starter_code) setCode(data.question.starter_code);
+    });
+
+    return () => { socket.off('ai_text_response'); socket.off('ai_nudge'); socket.off('session_data'); };
+  }, []);
+
+  const speakText = (text) => {
+    if (!window.speechSynthesis) return;
+    setIsAiSpeaking(true);
+    window.speechSynthesis.cancel(); 
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    const voices = window.speechSynthesis.getVoices();
+    utterance.voice = voices.find(v => v.lang.includes('en-US')) || voices[0];
+    
+    utterance.onend = () => {
+        setIsAiSpeaking(false);
+        SpeechRecognition.startListening({ continuous: true }); 
+    };
+    window.speechSynthesis.speak(utterance);
+  };
+
+  // --- HANDLERS (Unchanged) ---
   const handleStart = (selectedConfig) => {
     setConfig(selectedConfig);
     setSessionStarted(true);
@@ -52,80 +139,62 @@ function App() {
     setLastActive(Date.now());
   };
 
-  
-  const handleRunCode = async () => {
-    if (!pyodideRef.current) {
-      setOutput(">> Python engine is still loading... please wait.");
-      return;
+  const handleEditorChange = (value) => {
+    setCode(value);
+    setLastActive(Date.now());
+    const now = Date.now();
+    if (now - lastTypeTime.current > 500) {
+      socket.emit('code_update', { code: value }); 
+      socket.emit('user_typing', { timestamp: now });
+      lastTypeTime.current = now;
     }
+  };
 
+  const handleRunCode = async () => {
+    if (!pyodideRef.current) { setOutput("Loading..."); return; }
     setIsRunning(true);
     setOutput(">> Running against Standard Test Case...\n");
 
     const testCaseStr = activeQuestion?.test_case || "";
     const metaDataStr = activeQuestion?.meta_data || "";
 
-    // --- THE FIX IS HERE ---
-    // We add "from typing import *" at the very top of the script.
-    // This defines List, Optional, Dict, etc. so the code doesn't crash.
     const executionScript = `
 import sys
 import json
 from io import StringIO
-from typing import * # <--- FIX: Imports List, Optional, etc.
+from typing import *
 
-# 1. Setup Output Capture
 old_stdout = sys.stdout
 sys.stdout = mystdout = StringIO()
 
 try:
-    # 2. Run User Code
     user_code = """${code.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"""
     exec(user_code)
 
-    # 3. Parse Metadata & Test Case
     raw_test_case = """${testCaseStr.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"""
     raw_metadata = """${metaDataStr.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"""
     
     if raw_test_case and raw_metadata:
         meta = json.loads(raw_metadata)
         func_name = meta.get('name', 'solution')
-        
-        # Parse Inputs
         inputs = raw_test_case.strip().split('\\n')
-        parsed_inputs = []
-        for inp in inputs:
-            try:
-                parsed_inputs.append(json.loads(inp))
-            except:
-                parsed_inputs.append(inp)
+        parsed_inputs = [json.loads(i) if i.startswith('[') or i.startswith('{') else i for i in inputs]
 
-        # 4. Find the Class & Function
         if 'Solution' in locals():
             sol = Solution()
             if hasattr(sol, func_name):
                 func = getattr(sol, func_name)
-                
                 print(f"--- Running: {func_name} ---")
                 print(f"Input: {parsed_inputs}")
-                
                 try:
-                    # Call function with arguments
-                    result = func(*parsed_inputs)
-                    print(f"Your Output: {result}")
-                except Exception as e:
-                    print(f"Runtime Error during call: {e}")
-            else:
-                print(f"Error: Method '{func_name}' not found in Solution class.")
-        else:
-            print("Error: class 'Solution' not found.")
-    else:
-        print("No standard test case found for this problem.")
+                    print(f"Output: {func(*parsed_inputs)}")
+                except Exception as e: print(f"Runtime Error: {e}")
+            else: print(f"Method {func_name} missing.")
+        else: print("Class Solution missing.")
+    else: print("No test cases.")
 
-except Exception as e:
-    print(f"Error: {e}")
+except Exception as e: print(f"Error: {e}")
 
-# 5. Return Output
 sys.stdout = old_stdout
 mystdout.getvalue()
 `;
@@ -133,72 +202,40 @@ mystdout.getvalue()
     try {
       const result = await pyodideRef.current.runPythonAsync(executionScript);
       setOutput(result);
-    } catch (err) {
-      setOutput(`Error: ${err.message}`);
-    } finally {
-      setIsRunning(false);
-    }
+    } catch (err) { setOutput(`Error: ${err.message}`); } 
+    finally { setIsRunning(false); }
   };
 
-
-  // --- EXISTING SENSORS (Mic + Socket) ---
+  // --- EXISTING SENSORS (Hark) ---
   useEffect(() => {
     if (!sessionStarted) return;
-
     let speechEvents = null;
-    navigator.mediaDevices.getUserMedia({ audio: true })
-      .then(stream => {
+    navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
         speechEvents = hark(stream, { threshold: -50 });
-        speechEvents.on('speaking', () => {
-          setIsSpeaking(true);
-          setLastActive(Date.now());
-        });
+        speechEvents.on('speaking', () => { setIsSpeaking(true); setLastActive(Date.now()); });
         speechEvents.on('stopped_speaking', () => setIsSpeaking(false));
-      })
-      .catch(err => console.error("Mic Error:", err));
+    }).catch(console.error);
 
     socket.on('connect', () => setStatus("Connected ✅"));
     socket.on('disconnect', () => setStatus("Disconnected 🔴"));
     
-    socket.on('session_data', (data) => {
-      setActiveQuestion(data.question);
-      if (data.question.starter_code) setCode(data.question.starter_code);
-    });
-
-    socket.on('ai_nudge', (data) => {
-      alert(`${config.persona}: ${data.message}`);
-      setLastActive(Date.now());
-    });
-
+    // Silence Check
     const silenceInterval = setInterval(() => {
       if (isSpeaking) { setLastActive(Date.now()); return; }
       const silenceDuration = (Date.now() - lastActive) / 1000;
-      if (silenceDuration > 50) { 
-        socket.emit('user_silent', { duration: silenceDuration });
-      }
+      if (silenceDuration > 50) socket.emit('user_silent', { duration: silenceDuration });
     }, 1000); 
 
     return () => {
-      socket.off('session_data');
-      socket.off('ai_nudge');
       clearInterval(silenceInterval);
       if (speechEvents) speechEvents.stop(); 
     };
   }, [lastActive, sessionStarted, config, isSpeaking]);
 
-  const handleEditorChange = (value) => {
-  setCode(value);
-  setLastActive(Date.now());
-
-  const now = Date.now();
-  if (now - lastTypeTime.current > 500) {
-    socket.emit('user_typing', { timestamp: now });
-    lastTypeTime.current = now;
-  }
-};
-
   if (!sessionStarted) return <Setup onStart={handleStart} />;
+  if (!browserSupportsSpeechRecognition) return <span>Use Chrome.</span>;
 
+  // --- YOUR EXACT UI (Unchanged) ---
   return (
     <div style={{ display: 'flex', width: '100vw', height: '100vh', backgroundColor: '#121212', color: 'white', fontFamily: 'Segoe UI, sans-serif', overflow: 'hidden' }}>
       
@@ -206,11 +243,22 @@ mystdout.getvalue()
       <div style={{ flex: 1, padding: '10px', display: 'flex', flexDirection: 'column', gap: '10px', borderRight: '1px solid #333', minWidth: '300px' }}>
         <div style={{ flex: 1, background: '#1e1e1e', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' }}>
           <h2 style={{ fontSize: '30px' }}>{config.persona}</h2>
+          <div style={{ fontSize: '50px', transform: isAiSpeaking ? 'scale(1.2)' : 'scale(1)', transition: '0.2s' }}>
+             {isAiSpeaking ? "🗣️" : "🤖"}
+          </div>
           <p style={{ color: '#888' }}>AI Interviewer</p>
         </div>
         
         <div style={{ flex: 1, background: '#000', borderRadius: '10px', overflow: 'hidden', position: 'relative' }}>
-          <Webcam audio={false} width="100%" height="100%" style={{ objectFit: "cover" }} />
+          {/* LOGIC ADDITION: Added ref={webcamRef} and screenshotFormat */}
+          <Webcam 
+             ref={webcamRef} 
+             screenshotFormat="image/jpeg"
+             audio={false} 
+             width="100%" 
+             height="100%" 
+             style={{ objectFit: "cover" }} 
+          />
           <div style={{
             position: 'absolute', bottom: 10, left: 10, 
             background: isSpeaking ? '#4caf50' : 'rgba(0,0,0,0.6)', 
@@ -236,9 +284,10 @@ mystdout.getvalue()
               <ReactMarkdown 
                 remarkPlugins={[remarkGfm]}
                 components={{
+                  // LOGIC ADDITION: Fix for ERR_BLOCKED_BY_RESPONSE
                   img: ({node, ...props}) => {
                     const proxyUrl = `https://images.weserv.nl/?url=${encodeURIComponent(props.src)}`;
-                    return <img {...props} src={proxyUrl} style={{maxWidth: '100%', borderRadius: '5px', marginTop: '10px'}} loading="lazy"/>;
+                    return <img {...props} src={proxyUrl} crossOrigin="anonymous" style={{maxWidth: '100%', borderRadius: '5px', marginTop: '10px'}} loading="lazy"/>;
                   }
                 }}
               >

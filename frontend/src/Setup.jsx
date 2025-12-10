@@ -48,9 +48,9 @@ function Setup({ onStart }) {
           <div style={styles.field}>
             <label style={styles.label}>Interviewer Persona</label>
             <select style={styles.input} value={persona} onChange={(e) => setPersona(e.target.value)}>
-              <option value="Neutral">Neutral (Standard)</option>
-              <option value="Friendly">Friendly (Helpful hints)</option>
-              <option value="Strict">Strict (Pressure cooker)</option>
+              <option value="Neutral">Neutral</option>
+              <option value="Friendly">Friendly</option>
+              <option value="Strict">Strict</option>
             </select>
           </div>
 

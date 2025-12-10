@@ -13,7 +13,6 @@ def get_python_starter_code(code_def_str):
         return "# No Python starter code found."
     except:
         return ""
-
 def clean_topic(topic_str):
     try:
         if topic_str.startswith("["):
